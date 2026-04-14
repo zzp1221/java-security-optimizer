@@ -1,0 +1,27 @@
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+
+# IDE
+.idea/
+.vscode/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Java / Maven
+target/
+**/target/
+
+# Node.js / Frontend
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+coverage/
+
+# Rust / Tauri
+**/src-tauri/target/
