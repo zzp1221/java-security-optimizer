@@ -9,6 +9,56 @@ import {
 import { useWorkbenchStore } from '../store/workbenchStore'
 
 export function ProjectPage() {
+  const unpackedRulePackExample = `custom-rule-pack/
+  rules/
+    JAVA.STRING.EQUALITY.rule.json
+    JAVA.RESOURCE.NOT_CLOSED.rule.json
+  docs/
+    README.md
+  metadata/
+    changelog.md
+
+示例规则文件：rules/JAVA.STRING.EQUALITY.rule.json
+{
+  "ruleId": "JAVA.STRING.EQUALITY",
+  "title": "String 比较使用 equals",
+  "severity": "MEDIUM",
+  "description": "禁止使用 == 比较字符串，必须使用 equals。",
+  "badExample": "if (a == b) { ... }",
+  "goodExample": "if (a.equals(b)) { ... }"
+}`
+  const manifestExample = `{
+  "packId": "pack.java.security.custom",
+  "version": "1.0.0",
+  "language": "java",
+  "engineVersionRange": "[1.0.0,2.0.0)",
+  "compatibility": {
+    "engineVersionRange": "[1.0.0,2.0.0)",
+    "environments": ["DEV", "PROD"]
+  },
+  "checksum": "8a5d3f9c7b1e...请替换为实际SHA-256",
+  "rules": [
+    {
+      "ruleId": "JAVA.STRING.EQUALITY",
+      "description": "Use equals for string compare",
+      "severity": "MEDIUM",
+      "autoFixSupported": true
+    },
+    {
+      "ruleId": "JAVA.RESOURCE.NOT_CLOSED",
+      "description": "Close streams with try-with-resources",
+      "severity": "HIGH",
+      "autoFixSupported": false
+    }
+  ],
+  "signature": {
+    "keyId": "dev-key-1",
+    "algorithm": "SHA256withRSA",
+    "publicKey": "Base64编码公钥",
+    "value": "对规范化payload签名后的Base64值"
+  }
+}`
+
   const { state, upsertTask, setWorkspacePath, setActiveTask } = useWorkbenchStore()
   const runningCount = state.task.tasks.filter((task) => task.status === 'running').length
   const [uploading, setUploading] = useState(false)
@@ -223,11 +273,13 @@ export function ProjectPage() {
 
         <article className="card">
           <h3>导入规则使用说明</h3>
-          <p>1. 准备规则包二进制文件（通常为 `.zip` 或 `.jar`）。</p>
-          <p>2. 准备 `manifest`，可通过上传 JSON 文件或直接粘贴 JSON 文本。</p>
-          <p>3. `manifest` 必填关键字段：`packId`、`version`、`language`、`engineVersionRange`、`checksum`、`rules`、`signature`。</p>
-          <p>4. 先在 `DEV` 环境验证签名和兼容性，通过后再导入 `PROD`。</p>
-          <p>5. 导入成功后点击“刷新已安装列表”，确认版本已入库。</p>
+          <p>1. 先按下面“未压缩规则包结构”组织规则文件，确认规则内容无误后再压缩成 `.zip/.jar/.bin` 上传。</p>
+          <pre>{unpackedRulePackExample}</pre>
+          <p>2. 按下方模板准备 `manifest`，可直接粘贴到左侧输入框或保存为 `manifest.json` 上传。</p>
+          <pre>{manifestExample}</pre>
+          <p>3. 计算压缩包的 `SHA-256` 填入 `checksum`，并使用私钥对规范化 payload 签名填入 `signature.value`。</p>
+          <p>4. 先在 `DEV` 环境验证签名与兼容性，通过后再导入 `PROD`。</p>
+          <p>5. 导入成功后点击“刷新已安装列表”，确认 `packId/version/ruleCount` 已入库。</p>
           <p className="muted">
             提示：`checksum` 必须和上传包一致；`signature.value` 必须是对规范化 payload 的签名值，否则会被拒绝。
           </p>

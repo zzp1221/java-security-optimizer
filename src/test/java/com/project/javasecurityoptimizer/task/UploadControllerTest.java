@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -33,6 +34,32 @@ class UploadControllerTest {
 
         Path projectPath = Path.of(response.projectPath());
         assertTrue(Files.exists(projectPath.resolve("Demo.java")));
+        assertEquals(1, response.fileCount());
+    }
+
+    @Test
+    void shouldAcceptMultipleJavaSourceUpload() throws IOException {
+        Path uploadRoot = Files.createTempDirectory("upload-controller-multi-java");
+        UploadController controller = new UploadController(uploadRoot);
+        MockMultipartFile fileA = new MockMultipartFile(
+                "file",
+                "DemoA.java",
+                "text/x-java-source",
+                "class DemoA {}".getBytes(StandardCharsets.UTF_8)
+        );
+        MockMultipartFile fileB = new MockMultipartFile(
+                "file",
+                "DemoB.java",
+                "text/x-java-source",
+                "class DemoB {}".getBytes(StandardCharsets.UTF_8)
+        );
+
+        UploadController.UploadProjectResponse response = controller.uploadProjectFiles(List.of(fileA, fileB));
+
+        Path projectPath = Path.of(response.projectPath());
+        assertTrue(Files.exists(projectPath.resolve("DemoA.java")));
+        assertTrue(Files.exists(projectPath.resolve("DemoB.java")));
+        assertEquals(2, response.fileCount());
     }
 
     @Test
@@ -66,6 +93,30 @@ class UploadControllerTest {
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
                 () -> controller.uploadProjectFile(file)
+        );
+        assertEquals(400, exception.getStatusCode().value());
+    }
+
+    @Test
+    void shouldRejectMixedFileTypesInMultipleUpload() throws IOException {
+        Path uploadRoot = Files.createTempDirectory("upload-controller-mixed");
+        UploadController controller = new UploadController(uploadRoot);
+        MockMultipartFile javaFile = new MockMultipartFile(
+                "file",
+                "Demo.java",
+                "text/x-java-source",
+                "class Demo {}".getBytes(StandardCharsets.UTF_8)
+        );
+        MockMultipartFile zipFile = new MockMultipartFile(
+                "file",
+                "sample.zip",
+                "application/zip",
+                buildArchive("Demo.java", "class Demo {}".getBytes(StandardCharsets.UTF_8))
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> controller.uploadProjectFiles(List.of(javaFile, zipFile))
         );
         assertEquals(400, exception.getStatusCode().value());
     }

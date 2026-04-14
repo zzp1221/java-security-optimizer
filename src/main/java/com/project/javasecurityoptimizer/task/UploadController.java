@@ -16,6 +16,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
@@ -35,36 +37,64 @@ public class UploadController {
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public UploadProjectResponse uploadProjectFile(@RequestParam("file") MultipartFile file) {
-        if (file == null || file.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "file must not be empty");
+    public UploadProjectResponse uploadProjectFiles(@RequestParam("file") List<MultipartFile> files) {
+        if (files == null || files.isEmpty() || files.stream().allMatch(file -> file == null || file.isEmpty())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "at least one file must be uploaded");
         }
-        String originalName = sanitizeFileName(file.getOriginalFilename());
-        UploadFileType fileType = detectFileType(originalName);
-        if (fileType == UploadFileType.UNSUPPORTED) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "only .java, .jar and .zip files are supported"
-            );
+        List<MultipartFile> normalizedFiles = files.stream()
+                .filter(file -> file != null && !file.isEmpty())
+                .toList();
+        if (normalizedFiles.size() > 1) {
+            for (MultipartFile file : normalizedFiles) {
+                String fileName = sanitizeFileName(file.getOriginalFilename());
+                if (detectFileType(fileName) != UploadFileType.JAVA_SOURCE) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "multi-file upload supports only .java files"
+                    );
+                }
+            }
         }
 
         String uploadId = "upload-" + DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(LocalDateTime.now()) + "-"
                 + UUID.randomUUID().toString().substring(0, 8);
         Path workDir = uploadRoot.resolve(uploadId);
-        Path archivePath = workDir.resolve(fileType == UploadFileType.JAR ? "source.jar" : "source.zip");
         Path extractedRoot = workDir.resolve("project");
+        List<String> uploadedFileNames = new ArrayList<>();
         try {
             Files.createDirectories(extractedRoot);
-            if (fileType == UploadFileType.JAVA_SOURCE) {
-                Path javaFile = extractedRoot.resolve(originalName);
-                try (InputStream inputStream = file.getInputStream()) {
-                    Files.copy(inputStream, javaFile, StandardCopyOption.REPLACE_EXISTING);
+            if (normalizedFiles.size() == 1) {
+                MultipartFile file = normalizedFiles.getFirst();
+                String originalName = sanitizeFileName(file.getOriginalFilename());
+                UploadFileType fileType = detectFileType(originalName);
+                if (fileType == UploadFileType.UNSUPPORTED) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "only .java, .jar and .zip files are supported"
+                    );
+                }
+                uploadedFileNames.add(originalName);
+                Path archivePath = workDir.resolve(fileType == UploadFileType.JAR ? "source.jar" : "source.zip");
+                if (fileType == UploadFileType.JAVA_SOURCE) {
+                    Path javaFile = resolveUniquePath(extractedRoot, originalName);
+                    try (InputStream inputStream = file.getInputStream()) {
+                        Files.copy(inputStream, javaFile, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } else {
+                    try (InputStream inputStream = file.getInputStream()) {
+                        Files.copy(inputStream, archivePath, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    unzipSafely(archivePath, extractedRoot);
                 }
             } else {
-                try (InputStream inputStream = file.getInputStream()) {
-                    Files.copy(inputStream, archivePath, StandardCopyOption.REPLACE_EXISTING);
+                for (MultipartFile file : normalizedFiles) {
+                    String originalName = sanitizeFileName(file.getOriginalFilename());
+                    uploadedFileNames.add(originalName);
+                    Path javaFile = resolveUniquePath(extractedRoot, originalName);
+                    try (InputStream inputStream = file.getInputStream()) {
+                        Files.copy(inputStream, javaFile, StandardCopyOption.REPLACE_EXISTING);
+                    }
                 }
-                unzipSafely(archivePath, extractedRoot);
             }
         } catch (IOException ioException) {
             throw new ResponseStatusException(
@@ -75,7 +105,20 @@ public class UploadController {
         }
 
         Path projectRoot = locateProjectRoot(extractedRoot);
-        return new UploadProjectResponse(uploadId, projectRoot.toAbsolutePath().toString(), originalName);
+        String displayName = uploadedFileNames.size() == 1
+                ? uploadedFileNames.getFirst()
+                : uploadedFileNames.size() + " java files";
+        return new UploadProjectResponse(
+                uploadId,
+                projectRoot.toAbsolutePath().toString(),
+                displayName,
+                List.copyOf(uploadedFileNames),
+                uploadedFileNames.size()
+        );
+    }
+
+    UploadProjectResponse uploadProjectFile(MultipartFile file) {
+        return uploadProjectFiles(List.of(file));
     }
 
     private void unzipSafely(Path zipFile, Path outputDir) throws IOException {
@@ -124,6 +167,24 @@ public class UploadController {
         return UploadFileType.UNSUPPORTED;
     }
 
+    private Path resolveUniquePath(Path parent, String fileName) {
+        Path candidate = parent.resolve(fileName);
+        if (!Files.exists(candidate)) {
+            return candidate;
+        }
+        int dot = fileName.lastIndexOf('.');
+        String base = dot < 0 ? fileName : fileName.substring(0, dot);
+        String extension = dot < 0 ? "" : fileName.substring(dot);
+        int index = 1;
+        while (true) {
+            Path fallback = parent.resolve(base + "-" + index + extension);
+            if (!Files.exists(fallback)) {
+                return fallback;
+            }
+            index++;
+        }
+    }
+
     private Path locateProjectRoot(Path extractedRoot) {
         try (java.util.stream.Stream<Path> pathStream = Files.walk(extractedRoot, 3)) {
             Path pomParent = pathStream
@@ -140,8 +201,13 @@ public class UploadController {
     public record UploadProjectResponse(
             String uploadId,
             String projectPath,
-            String fileName
+            String fileName,
+            List<String> fileNames,
+            int fileCount
     ) {
+        public UploadProjectResponse {
+            fileNames = fileNames == null ? List.of() : List.copyOf(fileNames);
+        }
     }
 
     private enum UploadFileType {
