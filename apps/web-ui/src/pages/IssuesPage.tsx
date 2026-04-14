@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { mockIssues } from '../mocks/mockData'
-import { queryIssues, seedWorkbenchStorage } from '../services/issueIndexDb'
+import { recordFixApplyAudit } from '../services/backendApi'
+import {
+  queryIssueFacets,
+  queryIssues,
+  seedWorkbenchStorage,
+} from '../services/issueIndexDb'
 import { useWorkbenchStore } from '../store/workbenchStore'
 import type { IssueItem, Severity } from '../types/workbench'
 
@@ -15,21 +19,42 @@ export function IssuesPage({ onOpenDiff }: IssuesPageProps) {
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [severity, setSeverity] = useState<Severity | 'all'>('all')
+  const [ruleId, setRuleId] = useState<string>('all')
+  const [filePath, setFilePath] = useState<string>('all')
   const [keyword, setKeyword] = useState('')
+  const [selectedIssue, setSelectedIssueLocal] = useState<IssueItem>()
+  const [ruleOptions, setRuleOptions] = useState<
+    Array<{ ruleId: string; ruleName: string; count: number }>
+  >([])
+  const [filePathOptions, setFilePathOptions] = useState<
+    Array<{ filePath: string; count: number }>
+  >([])
 
   const pageSize = 5
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
 
   useEffect(() => {
+    const mergedIssues = Object.values(state.task.issuesByTask).flat()
     seedWorkbenchStorage({
       workspace: state.workspace,
       tasks: state.task.tasks,
-      issues: mockIssues,
+      issues: mergedIssues,
       rulepacks: state.rulepacks,
     }).catch((error) => {
       console.error('初始化 IndexedDB 失败', error)
     })
-  }, [state.rulepacks, state.task.tasks, state.workspace])
+  }, [state.rulepacks, state.task.issuesByTask, state.task.tasks, state.workspace])
+
+  useEffect(() => {
+    queryIssueFacets(state.workspace.id, state.task.activeTaskId)
+      .then((facets) => {
+        setRuleOptions(facets.ruleOptions)
+        setFilePathOptions(facets.filePathOptions)
+      })
+      .catch((error) => {
+        console.error('读取筛选器选项失败', error)
+      })
+  }, [state.task.activeTaskId, state.workspace.id])
 
   useEffect(() => {
     let cancelled = false
@@ -38,6 +63,8 @@ export function IssuesPage({ onOpenDiff }: IssuesPageProps) {
       workspaceId: state.workspace.id,
       taskId: state.task.activeTaskId,
       severity,
+      ruleId: ruleId === 'all' ? undefined : ruleId,
+      filePath: filePath === 'all' ? undefined : filePath,
       keyword,
       page,
       pageSize,
@@ -48,6 +75,9 @@ export function IssuesPage({ onOpenDiff }: IssuesPageProps) {
         }
         setRows(result.rows)
         setTotal(result.total)
+        setSelectedIssueLocal((prev) =>
+          prev ? result.rows.find((item) => item.id === prev.id) ?? result.rows[0] : result.rows[0],
+        )
       })
       .finally(() => {
         if (!cancelled) {
@@ -58,7 +88,7 @@ export function IssuesPage({ onOpenDiff }: IssuesPageProps) {
     return () => {
       cancelled = true
     }
-  }, [state.task.activeTaskId, severity, keyword, page])
+  }, [state.workspace.id, state.task.activeTaskId, severity, ruleId, filePath, keyword, page])
 
   const fromToText = useMemo(() => {
     if (total === 0) {
@@ -68,6 +98,97 @@ export function IssuesPage({ onOpenDiff }: IssuesPageProps) {
     const end = Math.min(page * pageSize, total)
     return `${start}-${end} / ${total}`
   }, [page, total])
+
+  function createIssueContext(issue: IssueItem) {
+    const sourceLines = issue.fixPreview.before.split('\n')
+    const lineInPreview = Math.max(1, Math.min(issue.line, sourceLines.length))
+    const from = Math.max(1, lineInPreview - 2)
+    const to = Math.min(sourceLines.length, lineInPreview + 2)
+    const lines: Array<{ no: number; content: string; focus: boolean }> = []
+    for (let current = from; current <= to; current += 1) {
+      lines.push({
+        no: current,
+        content: sourceLines[current - 1] ?? '',
+        focus: current === lineInPreview,
+      })
+    }
+    return lines
+  }
+
+  function resolveTriggerReason(issue: IssueItem) {
+    if (issue.message.includes('硬编码')) {
+      return '规则检测到敏感信息以字面量形式出现在源码中。'
+    }
+    if (issue.message.includes('注入')) {
+      return '规则检测到拼接式 SQL 构造，缺少参数化约束。'
+    }
+    if (issue.message.includes('性能')) {
+      return '规则检测到热点循环中的低效对象创建模式。'
+    }
+    return `由规则 ${issue.ruleId} 命中，触发条件见问题描述。`
+  }
+
+  function exportCsv() {
+    const header = [
+      'issueId',
+      'taskId',
+      'ruleId',
+      'ruleName',
+      'severity',
+      'filePath',
+      'line',
+      'column',
+      'message',
+      'recommendation',
+      'createdAt',
+    ]
+    const escape = (value: string | number) =>
+      `"${String(value).replace(/"/g, '""')}"`
+    const content = [
+      header.join(','),
+      ...rows.map((issue) =>
+        [
+          issue.id,
+          issue.taskId,
+          issue.ruleId,
+          issue.ruleName,
+          issue.severity,
+          issue.filePath,
+          issue.line,
+          issue.column,
+          issue.message,
+          issue.recommendation,
+          issue.createdAt,
+        ]
+          .map(escape)
+          .join(','),
+      ),
+    ].join('\n')
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `issues-${state.task.activeTaskId}-p${page}.csv`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  async function onRecordFixApply(issue: IssueItem) {
+    try {
+      await recordFixApplyAudit({
+        taskId: issue.taskId,
+        rulePackId: 'backend-live',
+        fixId: issue.id,
+        operator: 'web-ui',
+      })
+      window.alert(`已记录修复审计：${issue.id}`)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error)
+      window.alert(`记录审计失败：${text}`)
+    }
+  }
 
   return (
     <section className="page">
@@ -91,6 +212,40 @@ export function IssuesPage({ onOpenDiff }: IssuesPageProps) {
             </select>
           </label>
           <label>
+            规则
+            <select
+              value={ruleId}
+              onChange={(event) => {
+                setRuleId(event.target.value)
+                setPage(1)
+              }}
+            >
+              <option value="all">全部</option>
+              {ruleOptions.map((option) => (
+                <option key={option.ruleId} value={option.ruleId}>
+                  {option.ruleName} ({option.count})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            文件
+            <select
+              value={filePath}
+              onChange={(event) => {
+                setFilePath(event.target.value)
+                setPage(1)
+              }}
+            >
+              <option value="all">全部</option>
+              {filePathOptions.map((option) => (
+                <option key={option.filePath} value={option.filePath}>
+                  {option.filePath} ({option.count})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             关键词
             <input
               value={keyword}
@@ -101,7 +256,10 @@ export function IssuesPage({ onOpenDiff }: IssuesPageProps) {
               placeholder="规则名 / 文件 / 描述"
             />
           </label>
-          <span className="muted">当前任务：{state.task.activeTaskId}</span>
+          <span className="muted">当前任务：{state.task.activeTaskId || '无'}</span>
+          <button type="button" className="btn-ghost" onClick={exportCsv}>
+            导出摘要 CSV
+          </button>
         </div>
 
         {loading ? <p>加载中...</p> : null}
@@ -135,11 +293,22 @@ export function IssuesPage({ onOpenDiff }: IssuesPageProps) {
                       type="button"
                       className="btn-ghost"
                       onClick={() => {
+                        setSelectedIssueLocal(issue)
                         setSelectedIssue(issue.id)
                         onOpenDiff()
                       }}
                     >
                       查看对比
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => {
+                        setSelectedIssueLocal(issue)
+                        setSelectedIssue(issue.id)
+                      }}
+                    >
+                      查看详情
                     </button>
                   </td>
                 </tr>
@@ -167,6 +336,43 @@ export function IssuesPage({ onOpenDiff }: IssuesPageProps) {
             下一页
           </button>
         </div>
+      </article>
+
+      <article className="card">
+        <h3>问题详情面板</h3>
+        {!selectedIssue ? (
+          <p>请先在问题列表中选择问题查看详情。</p>
+        ) : (
+          <>
+            <p>
+              规则：{selectedIssue.ruleName} ({selectedIssue.ruleId})
+            </p>
+            <p>
+              定位：{selectedIssue.filePath}:{selectedIssue.line}:{selectedIssue.column}
+            </p>
+            <p>触发原因：{resolveTriggerReason(selectedIssue)}</p>
+            <p>建议说明：{selectedIssue.recommendation}</p>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => onRecordFixApply(selectedIssue)}
+            >
+              记录修复审计
+            </button>
+            <div className="issue-context">
+              <p className="muted">上下文代码（模拟 Monaco 定位高亮）</p>
+              {createIssueContext(selectedIssue).map((line) => (
+                <div
+                  key={`${selectedIssue.id}-line-${line.no}`}
+                  className={`ctx-line ${line.focus ? 'ctx-line-focus' : ''}`}
+                >
+                  <span className="ctx-line-no">{line.no}</span>
+                  <code>{line.content}</code>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </article>
     </section>
   )

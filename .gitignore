@@ -25,3 +25,12 @@ coverage/
 
 # Rust / Tauri
 **/src-tauri/target/
+
+# Project docs to keep out of source repo
+infra/
+src/main/resources/离线代码优化器/
+src/main/resources/离线代码优化器-第二批交付物/
+src/main/resources/离线代码优化器-第三批交付物/
+src/main/resources/离线代码优化器-第四批交付物/
+src/main/resources/离线代码优化器-第五批交付物/
+uploads/

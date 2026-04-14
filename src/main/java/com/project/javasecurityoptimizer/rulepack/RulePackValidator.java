@@ -51,11 +51,18 @@ public class RulePackValidator {
         }
 
         try {
-            EngineVersionRange range = EngineVersionRange.parse(manifest.engineVersionRange());
+            String engineRange = manifest.compatibility().engineVersionRange();
+            EngineVersionRange range = EngineVersionRange.parse(engineRange);
             if (!range.contains(currentEngineVersion)) {
                 return RulePackValidationResult.fail(
                         RulePackErrorCode.ENGINE_VERSION_INCOMPATIBLE,
-                        "engineVersionRange validation failed"
+                        "compatibility.engineVersionRange validation failed"
+                );
+            }
+            if (!manifest.compatibility().supportsEnvironment(securityContext.environment())) {
+                return RulePackValidationResult.fail(
+                        RulePackErrorCode.COMPATIBILITY_INCOMPATIBLE,
+                        "compatibility.environments does not include environment: " + securityContext.environment()
                 );
             }
         } catch (Exception e) {
@@ -143,7 +150,8 @@ public class RulePackValidator {
                 manifest.packId(),
                 manifest.version(),
                 manifest.language(),
-                manifest.engineVersionRange(),
+                manifest.compatibility().engineVersionRange(),
+                manifest.compatibility().environments().stream().map(Enum::name).sorted().collect(Collectors.joining(",")),
                 manifest.checksum(),
                 ruleIds
         );

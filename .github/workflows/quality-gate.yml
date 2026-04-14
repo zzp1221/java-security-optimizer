@@ -1,0 +1,40 @@
+name: quality-gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Backend Test
+        run: mvn test -q
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/web-ui/package-lock.json
+
+      - name: Install Web Dependencies
+        run: npm --prefix apps/web-ui ci
+
+      - name: Web Lint
+        run: npm --prefix apps/web-ui run lint
+
+      - name: Web Build
+        run: npm --prefix apps/web-ui run build
+
+      - name: Contract And Smoke
+        run: mvn -q -Dtest=ProtocolSchemaContractTest,TaskSchedulerServiceE2ETest,FixValidationTest test

@@ -15,6 +15,7 @@ export type TaskStatus =
   | 'cancelled'
   | 'failed'
   | 'completed'
+  | 'archived'
 
 export interface AnalysisTask {
   id: string
@@ -26,6 +27,9 @@ export interface AnalysisTask {
   startedAt: string
   finishedAt?: string
   failureReason?: string
+  failureCategory?: string
+  attempt?: number
+  maxRetries?: number
 }
 
 export interface FixPreview {
@@ -62,6 +66,7 @@ export interface WorkbenchState {
   task: {
     activeTaskId: string
     tasks: AnalysisTask[]
+    issuesByTask: Record<string, IssueItem[]>
   }
   issues: {
     selectedIssueId?: string

@@ -9,12 +9,22 @@ public record TaskSubmitRequest(
         String taskId,
         String traceId,
         String workspaceId,
+        String language,
         String projectPath,
         AnalyzeMode mode,
         Set<String> ruleSet,
         List<String> changedFiles,
+        List<String> impactedFiles,
         Long maxFileSizeBytes,
+        Long degradeFileSizeBytes,
         Integer parseConcurrency,
-        Long parseTimeoutMillis
+        Long parseTimeoutMillis,
+        Integer parseRetryCount,
+        Integer ruleConcurrency,
+        Long ruleTimeoutMillis,
+        Set<String> degradeRuleSet,
+        Integer priority,
+        Long taskTimeoutMillis,
+        Integer maxRetries
 ) {
 }

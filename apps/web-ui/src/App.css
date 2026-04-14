@@ -121,6 +121,20 @@ main {
   min-width: 180px;
 }
 
+.card textarea,
+.card input,
+.card select {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.card textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .btn-ghost {
   border: 1px solid var(--border);
   background: #fff;

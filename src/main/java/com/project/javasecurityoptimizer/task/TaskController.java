@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -44,8 +45,29 @@ public class TaskController {
         return Map.of("cancelled", true, "taskId", taskId);
     }
 
+    @PostMapping("/{taskId}/retry")
+    public TaskSnapshot retryTask(@PathVariable String taskId) {
+        return taskSchedulerService.retry(taskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "task can not be retried: " + taskId));
+    }
+
     @GetMapping("/diagnostics")
     public TaskDiagnostics diagnostics() {
         return taskSchedulerService.diagnostics();
+    }
+
+    @GetMapping("/plugins/health")
+    public List<Map<String, Object>> pluginHealth() {
+        return taskSchedulerService.pluginHealth().stream()
+                .map(status -> Map.<String, Object>of(
+                        "language", status.language(),
+                        "pluginId", status.pluginId(),
+                        "status", status.status().name(),
+                        "implemented", status.implemented(),
+                        "compatible", status.compatible(),
+                        "supportsAutofix", status.supportsAutofix(),
+                        "message", status.message()
+                ))
+                .toList();
     }
 }

@@ -1,5 +1,6 @@
 package com.project.javasecurityoptimizer.task;
 
+import com.project.javasecurityoptimizer.analysis.AnalysisIssue;
 import com.project.javasecurityoptimizer.analysis.ProgressEvent;
 import com.project.javasecurityoptimizer.storage.TaskStatus;
 
@@ -17,6 +18,10 @@ public record TaskSnapshot(
         int issueCount,
         long durationMillis,
         String failureReason,
-        List<ProgressEvent> events
+        TaskFailureCategory failureCategory,
+        int attempt,
+        int maxRetries,
+        List<ProgressEvent> events,
+        List<AnalysisIssue> issues
 ) {
 }

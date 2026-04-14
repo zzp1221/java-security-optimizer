@@ -14,6 +14,13 @@
 - 目录权限白名单：
   - 仅允许 `selectProjectDir` 授权后的目录用于后续任务
 
+并已补充 `04-安全加固与权限治理（第三批）` 的关键安全措施：
+
+- 敏感路径拦截：禁止将系统敏感目录加入授权白名单。
+- 默认禁网：`startEngine` 仅允许 loopback `baseUrl`（`127.0.0.1/localhost/::1`）。
+- 风险动作阻断：仅允许 `java/java.exe` 作为 sidecar 命令，并阻断高风险启动参数（如 `-javaagent`）。
+- 操作确认：`cancelTask` 需要 `confirmText` 且必须等于 `CANCEL:{taskId}`。
+
 ## 目录结构
 
 - `src-tauri/src/lib.rs`：命令、状态管理、sidecar 进程监督逻辑
@@ -40,5 +47,13 @@
     taskId: "task-001",
     mode: "incremental"
   }
+}
+```
+
+```ts
+// cancelTask
+{
+  taskId: "task-001",
+  confirmText: "CANCEL:task-001"
 }
 ```

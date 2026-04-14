@@ -7,10 +7,10 @@ public final class TaskStateMachine {
     private static final Map<TaskStatus, EnumSet<TaskStatus>> TRANSITIONS = Map.of(
             TaskStatus.CREATED, EnumSet.of(TaskStatus.QUEUED, TaskStatus.CANCELLED, TaskStatus.FAILED),
             TaskStatus.QUEUED, EnumSet.of(TaskStatus.RUNNING, TaskStatus.CANCELLED, TaskStatus.FAILED),
-            TaskStatus.RUNNING, EnumSet.of(TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.FAILED),
+            TaskStatus.RUNNING, EnumSet.of(TaskStatus.QUEUED, TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.FAILED),
             TaskStatus.COMPLETED, EnumSet.of(TaskStatus.ARCHIVED),
-            TaskStatus.FAILED, EnumSet.of(TaskStatus.ARCHIVED),
-            TaskStatus.CANCELLED, EnumSet.of(TaskStatus.ARCHIVED),
+            TaskStatus.FAILED, EnumSet.of(TaskStatus.QUEUED, TaskStatus.ARCHIVED),
+            TaskStatus.CANCELLED, EnumSet.of(TaskStatus.QUEUED, TaskStatus.ARCHIVED),
             TaskStatus.ARCHIVED, EnumSet.noneOf(TaskStatus.class)
     );
 

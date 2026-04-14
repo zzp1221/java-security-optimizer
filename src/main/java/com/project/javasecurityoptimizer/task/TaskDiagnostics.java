@@ -7,7 +7,9 @@ import java.util.List;
 
 public record TaskDiagnostics(
         List<RecentTaskMetric> recentTasks,
-        List<FailureTopReason> failureTopReasons
+        List<FailureTopReason> failureTopReasons,
+        List<DurationDistribution> durationDistributions,
+        List<RuleHitTop> ruleHitTop
 ) {
     public record RecentTaskMetric(
             String taskId,
@@ -21,6 +23,18 @@ public record TaskDiagnostics(
     public record FailureTopReason(
             String reason,
             long count
+    ) {
+    }
+
+    public record DurationDistribution(
+            String bucket,
+            long count
+    ) {
+    }
+
+    public record RuleHitTop(
+            String ruleId,
+            long hits
     ) {
     }
 }

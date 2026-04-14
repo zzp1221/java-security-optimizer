@@ -91,6 +91,7 @@ struct SubmitTaskRequest {
 #[serde(rename_all = "camelCase")]
 struct CancelTaskRequest {
     task_id: String,
+    confirm_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,6 +116,7 @@ fn select_project_dir(state: State<'_, AppState>) -> Result<Option<String>, Stri
     };
 
     let canonical = normalize_path(&path)?;
+    ensure_not_sensitive_path(&canonical)?;
     let mut whitelist = state.whitelist.lock().map_err(|e| e.to_string())?;
     whitelist.insert(canonical.clone());
     Ok(Some(canonical.to_string_lossy().to_string()))
@@ -130,6 +132,7 @@ async fn start_engine(
         if let Some(project_dir) = &req.project_dir {
             ensure_authorized(&state, project_dir)?;
         }
+        enforce_engine_security_policy(req)?;
     }
 
     let mut guard = state.engine.lock().await;
@@ -158,6 +161,7 @@ async fn cancel_task(
     state: State<'_, AppState>,
     request: CancelTaskRequest,
 ) -> Result<CancelTaskResponse, String> {
+    ensure_cancel_confirmation(&request)?;
     let mut engine = state.engine.lock().await;
     engine.cancel_task(&request.task_id).await?;
     Ok(CancelTaskResponse {
@@ -342,6 +346,7 @@ async fn sidecar_worker_loop(
 
 fn ensure_authorized(state: &State<'_, AppState>, project_dir: &str) -> Result<(), String> {
     let requested = normalize_path(project_dir)?;
+    ensure_not_sensitive_path(&requested)?;
     let whitelist = state.whitelist.lock().map_err(|e| e.to_string())?;
     let allowed = whitelist
         .iter()
@@ -393,6 +398,72 @@ fn merge_engine_config(request: Option<StartEngineRequest>) -> Result<EngineConf
         }
     }
     Ok(config)
+}
+
+fn ensure_not_sensitive_path(path: &Path) -> Result<(), String> {
+    let normalized = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    const SENSITIVE_MARKERS: [&str; 8] = [
+        "/windows",
+        "/program files",
+        "/program files (x86)",
+        "/programdata",
+        "/users/default",
+        "/.ssh",
+        "/.gnupg",
+        "/system32",
+    ];
+    if SENSITIVE_MARKERS.iter().any(|marker| normalized.contains(marker)) {
+        return Err(format!(
+            "sensitive path is not allowed for authorization: {}",
+            path.to_string_lossy()
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_cancel_confirmation(request: &CancelTaskRequest) -> Result<(), String> {
+    let expected = format!("CANCEL:{}", request.task_id);
+    let actual = request.confirm_text.as_deref().unwrap_or_default();
+    if actual != expected {
+        return Err(format!(
+            "cancel confirmation required, expected confirmText=\"{}\"",
+            expected
+        ));
+    }
+    Ok(())
+}
+
+fn enforce_engine_security_policy(request: &StartEngineRequest) -> Result<(), String> {
+    if let Some(command) = &request.command {
+        let normalized = command.trim().replace('\\', "/").to_lowercase();
+        let allowed = normalized.ends_with("/java") || normalized.ends_with("/java.exe") || normalized == "java";
+        if !allowed {
+            return Err("engine command is blocked by security policy, only java/java.exe is allowed".to_string());
+        }
+    }
+
+    if let Some(base_url) = &request.base_url {
+        let parsed = reqwest::Url::parse(base_url).map_err(|e| format!("invalid baseUrl: {e}"))?;
+        let host = parsed.host_str().unwrap_or_default().to_lowercase();
+        let is_loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
+        if !is_loopback {
+            return Err("baseUrl is blocked by default deny-network policy, only loopback is allowed".to_string());
+        }
+    }
+
+    if let Some(args) = &request.args {
+        for arg in args {
+            let lowered = arg.to_lowercase();
+            let blocked = lowered.contains("-javaagent")
+                || lowered.contains("-agentlib:jdwp")
+                || lowered.contains("http://")
+                || lowered.contains("https://");
+            if blocked {
+                return Err(format!("engine arg is blocked by security policy: {}", arg));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn join_url(base_url: &str, path: &str) -> String {

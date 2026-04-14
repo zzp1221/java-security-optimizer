@@ -4,6 +4,8 @@ public record AnalysisStats(
         int indexedFiles,
         int parsedFiles,
         int skippedFiles,
-        int issueCount
+        int issueCount,
+        int ruleHitCount,
+        int failedRuleCount
 ) {
 }

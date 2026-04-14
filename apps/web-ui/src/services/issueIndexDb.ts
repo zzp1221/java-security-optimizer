@@ -47,6 +47,11 @@ export interface PagedIssues {
   total: number
 }
 
+export interface IssueFacets {
+  ruleOptions: Array<{ ruleId: string; ruleName: string; count: number }>
+  filePathOptions: Array<{ filePath: string; count: number }>
+}
+
 export interface WorkbenchSeedPayload {
   workspace: WorkspaceSummary
   tasks: AnalysisTask[]
@@ -228,6 +233,52 @@ export async function queryIssues(params: IssueQuery): Promise<PagedIssues> {
   return {
     rows: toPaged(filtered, params.page, params.pageSize),
     total: filtered.length,
+  }
+}
+
+export async function queryIssueFacets(
+  workspaceId: string,
+  taskId?: string,
+): Promise<IssueFacets> {
+  const rows = await db.issuesIndex.where('workspaceId').equals(workspaceId).toArray()
+  const taskScopedRows = taskId ? rows.filter((row) => row.taskId === taskId) : rows
+
+  const ruleCounter = new Map<string, { ruleId: string; ruleName: string; count: number }>()
+  const fileCounter = new Map<string, { filePath: string; count: number }>()
+
+  for (const row of taskScopedRows) {
+    const ruleItem = ruleCounter.get(row.ruleId)
+    if (ruleItem) {
+      ruleItem.count += 1
+    } else {
+      ruleCounter.set(row.ruleId, {
+        ruleId: row.ruleId,
+        ruleName: row.ruleName,
+        count: 1,
+      })
+    }
+
+    const fileItem = fileCounter.get(row.filePath)
+    if (fileItem) {
+      fileItem.count += 1
+    } else {
+      fileCounter.set(row.filePath, {
+        filePath: row.filePath,
+        count: 1,
+      })
+    }
+  }
+
+  const ruleOptions = [...ruleCounter.values()].sort(
+    (left, right) => right.count - left.count,
+  )
+  const filePathOptions = [...fileCounter.values()].sort(
+    (left, right) => right.count - left.count,
+  )
+
+  return {
+    ruleOptions,
+    filePathOptions,
   }
 }
 

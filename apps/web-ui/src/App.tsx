@@ -12,7 +12,7 @@ const routeEntries: Array<{ key: RouteKey; label: string; hash: string }> = [
   { key: 'project', label: '项目页', hash: '#/project' },
   { key: 'tasks', label: '任务页', hash: '#/tasks' },
   { key: 'issues', label: '问题列表页', hash: '#/issues' },
-  { key: 'diff', label: '代码对比页', hash: '#/diff' },
+  { key: 'diff', label: '结果对比页', hash: '#/diff' },
 ]
 
 function parseHashRoute(hash: string): RouteKey {

@@ -160,6 +160,7 @@ export const initialWorkbenchState: WorkbenchState = {
   task: {
     activeTaskId: tasks[0].id,
     tasks,
+    issuesByTask: {},
   },
   issues: {},
   rulepacks,
