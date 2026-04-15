@@ -2,22 +2,24 @@ import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { CodeDiffPage } from './pages/CodeDiffPage'
 import { IssuesPage } from './pages/IssuesPage'
+import { JitHintPage } from './pages/JitHintPage'
 import { ProjectPage } from './pages/ProjectPage'
 import { TaskPage } from './pages/TaskPage'
 import { WorkbenchProvider } from './store/workbenchStore'
 
-type RouteKey = 'project' | 'tasks' | 'issues' | 'diff'
+type RouteKey = 'project' | 'tasks' | 'issues' | 'diff' | 'jit-hints'
 
 const routeEntries: Array<{ key: RouteKey; label: string; hash: string }> = [
   { key: 'project', label: '项目页', hash: '#/project' },
   { key: 'tasks', label: '任务页', hash: '#/tasks' },
   { key: 'issues', label: '问题列表页', hash: '#/issues' },
   { key: 'diff', label: '结果对比页', hash: '#/diff' },
+  { key: 'jit-hints', label: 'JIT提示页', hash: '#/jit-hints' },
 ]
 
 function parseHashRoute(hash: string): RouteKey {
   const clean = hash.replace(/^#\//, '')
-  if (clean === 'tasks' || clean === 'issues' || clean === 'diff') {
+  if (clean === 'tasks' || clean === 'issues' || clean === 'diff' || clean === 'jit-hints') {
     return clean
   }
   return 'project'
@@ -48,6 +50,9 @@ function WorkbenchApp() {
     }
     if (route === 'diff') {
       return <CodeDiffPage />
+    }
+    if (route === 'jit-hints') {
+      return <JitHintPage />
     }
     return <ProjectPage />
   }, [route])

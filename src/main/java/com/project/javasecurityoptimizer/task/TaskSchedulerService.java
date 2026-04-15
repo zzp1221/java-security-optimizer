@@ -5,6 +5,9 @@ import com.project.javasecurityoptimizer.analysis.AnalyzeTaskRequest;
 import com.project.javasecurityoptimizer.analysis.AnalyzeTaskResult;
 import com.project.javasecurityoptimizer.analysis.AnalysisIssue;
 import com.project.javasecurityoptimizer.analysis.ProgressEvent;
+import com.project.javasecurityoptimizer.analysis.hint.ContextAwareJitHintService;
+import com.project.javasecurityoptimizer.analysis.hint.ContextHintRequest;
+import com.project.javasecurityoptimizer.analysis.hint.ContextHintResponse;
 import com.project.javasecurityoptimizer.plugin.LanguagePlugin;
 import com.project.javasecurityoptimizer.plugin.PluginException;
 import com.project.javasecurityoptimizer.plugin.PluginHealthStatus;
@@ -14,6 +17,7 @@ import com.project.javasecurityoptimizer.security.SecurityAuditService;
 import com.project.javasecurityoptimizer.storage.TaskRecord;
 import com.project.javasecurityoptimizer.storage.TaskStateMachine;
 import com.project.javasecurityoptimizer.storage.TaskStatus;
+import org.springframework.beans.factory.annotation.Autowired;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -49,6 +53,7 @@ public class TaskSchedulerService {
 
     private final PluginManagerService pluginManagerService;
     private final SecurityAuditService securityAuditService;
+    private final ContextAwareJitHintService contextAwareJitHintService;
     private final Map<String, ManagedTask> tasks = new ConcurrentHashMap<>();
     private final PriorityBlockingQueue<QueuedTask> queue = new PriorityBlockingQueue<>();
     private final AtomicLong queueSequence = new AtomicLong();
@@ -65,8 +70,18 @@ public class TaskSchedulerService {
     private volatile boolean running;
 
     public TaskSchedulerService(PluginManagerService pluginManagerService, SecurityAuditService securityAuditService) {
+        this(pluginManagerService, securityAuditService, new ContextAwareJitHintService());
+    }
+
+    @Autowired
+    public TaskSchedulerService(
+            PluginManagerService pluginManagerService,
+            SecurityAuditService securityAuditService,
+            ContextAwareJitHintService contextAwareJitHintService
+    ) {
         this.pluginManagerService = pluginManagerService;
         this.securityAuditService = securityAuditService;
+        this.contextAwareJitHintService = contextAwareJitHintService;
     }
 
     @PostConstruct
@@ -139,6 +154,16 @@ public class TaskSchedulerService {
     public Optional<TaskSnapshot> findById(String taskId) {
         ManagedTask task = tasks.get(taskId);
         return task == null ? Optional.empty() : Optional.of(snapshot(task));
+    }
+
+    public Optional<ContextHintResponse> findJitHints(String taskId) {
+        ManagedTask task = tasks.get(taskId);
+        if (task == null) {
+            return Optional.empty();
+        }
+        synchronized (task) {
+            return Optional.ofNullable(task.jitHintResponse);
+        }
     }
 
     public Optional<TaskSnapshot> retry(String taskId) {
@@ -341,6 +366,7 @@ public class TaskSchedulerService {
         Future<AnalyzeTaskResult> future = analysisExecutor.submit(() -> task.plugin.analyze(task.request));
         try {
             AnalyzeTaskResult result = future.get(task.taskTimeoutMillis, TimeUnit.MILLISECONDS);
+            ContextHintResponse jitHintResponse = generateJitHints(task);
             synchronized (task) {
                 if (task.record.status() == TaskStatus.CANCELLED || task.cancelRequested) {
                     if (task.record.status() != TaskStatus.CANCELLED
@@ -356,6 +382,14 @@ public class TaskSchedulerService {
                 task.issues.addAll(result.issues());
                 for (AnalysisIssue issue : result.issues()) {
                     task.ruleHitCounters.put(issue.ruleId(), task.ruleHitCounters.getOrDefault(issue.ruleId(), 0L) + 1L);
+                }
+                task.jitHintResponse = jitHintResponse;
+                if (jitHintResponse != null) {
+                    task.events.add(ProgressEvent.of(
+                            "hint",
+                            95,
+                            "已生成多级上下文与JIT提示，条数: " + jitHintResponse.jitHints().size()
+                    ));
                 }
                 TaskStateMachine.assertTransit(task.record.status(), TaskStatus.COMPLETED);
                 task.record.finishCompleted(Instant.now(), result.issues().size(), null);
@@ -379,6 +413,37 @@ public class TaskSchedulerService {
                 return;
             }
             handleTaskError(task, TaskFailureCategory.ANALYSIS_ERROR, rootCauseMessage(e));
+        }
+    }
+
+    private ContextHintResponse generateJitHints(ManagedTask task) {
+        if (!"java".equalsIgnoreCase(task.language)) {
+            return null;
+        }
+        try {
+            List<String> targetFiles = List.of();
+            if (task.request.mode() == AnalyzeMode.INCREMENTAL) {
+                List<String> combined = new ArrayList<>();
+                for (Path path : task.request.changedFiles()) {
+                    combined.add(path.toString());
+                }
+                for (Path path : task.request.impactedFiles()) {
+                    combined.add(path.toString());
+                }
+                targetFiles = combined;
+            }
+            ContextHintRequest hintRequest = new ContextHintRequest(
+                    task.request.projectPath().toString(),
+                    targetFiles,
+                    100,
+                    40
+            );
+            return contextAwareJitHintService.analyze(hintRequest);
+        } catch (Exception e) {
+            synchronized (task) {
+                task.events.add(ProgressEvent.of("hint", 95, "JIT提示生成失败: " + rootCauseMessage(e)));
+            }
+            return null;
         }
     }
 
@@ -470,6 +535,7 @@ public class TaskSchedulerService {
         private final List<ProgressEvent> events = new ArrayList<>();
         private final List<AnalysisIssue> issues = new ArrayList<>();
         private final Map<String, Long> ruleHitCounters = new HashMap<>();
+        private ContextHintResponse jitHintResponse;
         private boolean cancelRequested;
 
         private ManagedTask(

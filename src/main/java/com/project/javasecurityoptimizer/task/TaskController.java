@@ -1,5 +1,6 @@
 package com.project.javasecurityoptimizer.task;
 
+import com.project.javasecurityoptimizer.analysis.hint.ContextHintResponse;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,6 +35,12 @@ public class TaskController {
     public TaskSnapshot getTask(@PathVariable String taskId) {
         return taskSchedulerService.findById(taskId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "task not found: " + taskId));
+    }
+
+    @GetMapping("/{taskId}/jit-hints")
+    public ContextHintResponse getJitHints(@PathVariable String taskId) {
+        return taskSchedulerService.findJitHints(taskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "jit hints not found for task: " + taskId));
     }
 
     @PostMapping("/{taskId}/cancel")

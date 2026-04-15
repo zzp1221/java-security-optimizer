@@ -121,6 +121,64 @@ export interface SecurityAuditEventView {
   metadata: Record<string, string>
 }
 
+export interface ContextHintRequestPayload {
+  projectPath: string
+  targetFiles?: string[]
+  maxFiles?: number
+  maxMethodsPerFile?: number
+}
+
+export interface ProjectContextSummaryView {
+  fileCount: number
+  classCount: number
+  methodCount: number
+  loopCount: number
+  branchCount: number
+}
+
+export interface ClassContextSummaryView {
+  className: string
+  methodCount: number
+  fieldCount: number
+  constructorCount: number
+}
+
+export interface MethodContextSummaryView {
+  methodName: string
+  statementCount: number
+  loopCount: number
+  branchCount: number
+  callCount: number
+  synchronizedMethod: boolean
+}
+
+export interface FileContextSummaryView {
+  filePath: string
+  classCount: number
+  methodCount: number
+  loopCount: number
+  branchCount: number
+  classes: ClassContextSummaryView[]
+  methods: MethodContextSummaryView[]
+}
+
+export interface JitHintView {
+  hintId: string
+  level: string
+  filePath: string
+  className?: string
+  methodName?: string
+  message: string
+  recommendation: string
+  priority: 'HIGH' | 'MEDIUM' | 'LOW' | string
+}
+
+export interface ContextHintResponseView {
+  projectSummary: ProjectContextSummaryView
+  fileSummaries: FileContextSummaryView[]
+  jitHints: JitHintView[]
+}
+
 function normalizeStatus(input: string): TaskStatus {
   const lowered = input.toLowerCase()
   if (lowered === 'created' || lowered === 'queued' || lowered === 'running' || lowered === 'cancelled' || lowered === 'failed' || lowered === 'completed' || lowered === 'archived') {
@@ -344,4 +402,21 @@ export async function recordFixApplyAudit(payload: {
       }),
     },
   )
+}
+
+export async function getJitContextHints(
+  payload: ContextHintRequestPayload,
+): Promise<ContextHintResponseView> {
+  return requestJson<ContextHintResponseView>('/analysis/hints/jit-context', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      projectPath: payload.projectPath,
+      targetFiles: payload.targetFiles,
+      maxFiles: payload.maxFiles,
+      maxMethodsPerFile: payload.maxMethodsPerFile,
+    }),
+  })
 }

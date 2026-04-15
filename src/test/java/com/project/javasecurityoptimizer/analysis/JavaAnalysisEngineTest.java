@@ -386,4 +386,43 @@ class JavaAnalysisEngineTest {
         assertTrue(hitRules.contains("JAVA.STRING.EQUALITY"));
         assertFalse(hitRules.contains("JAVA.MAINTAINABILITY.MAGIC_NUMBER"));
     }
+
+    @Test
+    void shouldParseLargeFileWithMemoryMappedRead() throws IOException {
+        Path projectDir = Files.createTempDirectory("analysis-mmap-test");
+        Path javaFile = projectDir.resolve("LargeMmap.java");
+        StringBuilder builder = new StringBuilder();
+        builder.append("class LargeMmap {\n");
+        builder.append("    void run() {\n");
+        builder.append("        String a = \"1\";\n");
+        builder.append("        String b = \"2\";\n");
+        builder.append("        boolean same = a == b;\n");
+        builder.append("    }\n");
+        for (int i = 0; i < 25_000; i++) {
+            builder.append("    int field").append(i).append(" = ").append(i).append(";\n");
+        }
+        builder.append("}\n");
+        Files.writeString(javaFile, builder.toString());
+
+        JavaAnalysisEngine engine = new JavaAnalysisEngine();
+        AnalyzeTaskRequest request = new AnalyzeTaskRequest(
+                projectDir,
+                Set.of("JAVA.STRING.EQUALITY"),
+                AnalyzeMode.FULL,
+                Set.of(),
+                Set.of(),
+                2 * 1024 * 1024L,
+                256 * 1024L,
+                4,
+                Duration.ofSeconds(5),
+                1,
+                8,
+                Duration.ofSeconds(2),
+                Set.of("JAVA.STRING.EQUALITY")
+        );
+        AnalyzeTaskResult result = engine.analyze(request);
+
+        assertEquals(1, result.stats().parsedFiles());
+        assertTrue(result.issues().stream().anyMatch(issue -> issue.ruleId().equals("JAVA.STRING.EQUALITY")));
+    }
 }

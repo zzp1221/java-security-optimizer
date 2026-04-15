@@ -121,6 +121,10 @@ main {
   min-width: 180px;
 }
 
+.full-width {
+  display: block;
+}
+
 .card textarea,
 .card input,
 .card select {

@@ -27,8 +27,12 @@ import com.project.javasecurityoptimizer.rulepack.RulePackLocalRepository;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileTime;
 import java.time.Duration;
 import java.time.Instant;
@@ -45,6 +49,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -52,6 +57,7 @@ public class JavaAnalysisEngine {
     private static final int AST_CACHE_MAX_ENTRIES = 2_000;
     private static final int SYMBOL_CACHE_MAX_ENTRIES = 2_000;
     private static final int RULE_CACHE_MAX_ENTRIES = 20_000;
+    private static final long MMAP_PARSE_THRESHOLD_BYTES = 512 * 1024L;
     private static final Set<String> DEFAULT_DEGRADE_RULE_SET = Set.of(
             "JAVA.STRING.EQUALITY",
             "JAVA.NPE.DEREFERENCE",
@@ -275,7 +281,8 @@ public class JavaAnalysisEngine {
             return new ParseResult(List.of(), Map.of(), Set.of(), 0, events);
         }
 
-        ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, request.parseConcurrency()));
+        ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+        Semaphore parseSemaphore = new Semaphore(Math.max(1, request.parseConcurrency()));
         try {
             List<Future<ParsedSource>> futures = new ArrayList<>();
             for (FileIndexInfo file : files) {
@@ -289,7 +296,14 @@ public class JavaAnalysisEngine {
                     continue;
                 }
                 executionContext.astCacheMisses++;
-                Callable<ParsedSource> task = () -> new ParsedSource(path, StaticJavaParser.parse(path));
+                Callable<ParsedSource> task = () -> {
+                    parseSemaphore.acquire();
+                    try {
+                        return new ParsedSource(path, parseCompilationUnit(path, file.sizeBytes()));
+                    } finally {
+                        parseSemaphore.release();
+                    }
+                };
                 futures.add(pool.submit(task));
             }
 
@@ -313,7 +327,7 @@ public class JavaAnalysisEngine {
                     ensureSymbolIndex(file, fingerprint, parsedSource.compilationUnit(), executionContext);
                 } catch (Exception e) {
                     future.cancel(true);
-                    ParsedSource retryParsed = retryParse(pool, file, fileInfo, request, executionContext, events);
+                    ParsedSource retryParsed = retryParse(pool, parseSemaphore, file, fileInfo, request, events);
                     if (retryParsed != null) {
                         parsed.add(retryParsed);
                         fileFingerprint.put(file, fingerprint);
@@ -332,22 +346,28 @@ public class JavaAnalysisEngine {
             }
             return new ParseResult(parsed, fileFingerprint, degradedFiles, failed, events);
         } finally {
-            pool.shutdownNow();
+            pool.shutdown();
         }
     }
 
     private ParsedSource retryParse(
             ExecutorService pool,
+            Semaphore parseSemaphore,
             Path file,
             FileIndexInfo fileInfo,
             AnalyzeTaskRequest request,
-            ExecutionContext executionContext,
             List<ProgressEvent> events
     ) {
-        String fingerprint = fingerprint(file, fileInfo.sizeBytes());
         for (int attempt = 1; attempt <= request.parseRetryCount(); attempt++) {
             try {
-                Future<ParsedSource> retryFuture = pool.submit(() -> new ParsedSource(file, StaticJavaParser.parse(file)));
+                Future<ParsedSource> retryFuture = pool.submit(() -> {
+                    parseSemaphore.acquire();
+                    try {
+                        return new ParsedSource(file, parseCompilationUnit(file, fileInfo.sizeBytes()));
+                    } finally {
+                        parseSemaphore.release();
+                    }
+                });
                 ParsedSource parsed = retryFuture.get(request.parseTimeout().toMillis(), TimeUnit.MILLISECONDS);
                 events.add(ProgressEvent.of("parse", 40, file.toString(), "解析重试成功，第 " + attempt + " 次"));
                 return parsed;
@@ -357,6 +377,22 @@ public class JavaAnalysisEngine {
             }
         }
         return null;
+    }
+
+    private com.github.javaparser.ast.CompilationUnit parseCompilationUnit(Path file, long sizeBytes) throws IOException {
+        if (sizeBytes >= MMAP_PARSE_THRESHOLD_BYTES) {
+            try (FileChannel fileChannel = FileChannel.open(file, StandardOpenOption.READ)) {
+                MappedByteBuffer mappedByteBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, fileChannel.size());
+                String source = StandardCharsets.UTF_8.decode(mappedByteBuffer).toString();
+                try {
+                    return StaticJavaParser.parse(source);
+                } catch (RuntimeException parseException) {
+                    // Fallback for edge cases (e.g., non-UTF8 source)
+                    return StaticJavaParser.parse(file);
+                }
+            }
+        }
+        return StaticJavaParser.parse(file);
     }
 
     private void ensureSymbolIndex(
@@ -396,7 +432,8 @@ public class JavaAnalysisEngine {
             return new RuleRunResult(List.of(), ruleHitCounts, ruleDurationMillis, failedRuleIds, events);
         }
 
-        ExecutorService rulePool = Executors.newFixedThreadPool(Math.max(1, concurrency));
+        ExecutorService rulePool = Executors.newVirtualThreadPerTaskExecutor();
+        Semaphore ruleSemaphore = new Semaphore(Math.max(1, concurrency));
         try {
             List<SubmittedRuleTask> submittedTasks = new ArrayList<>();
             for (ParsedSource parsedSource : parsedSources) {
@@ -413,7 +450,7 @@ public class JavaAnalysisEngine {
                         continue;
                     }
                     executionContext.ruleCacheMisses++;
-                    Future<RuleExecutionOutcome> future = rulePool.submit(new RuleTask(rule, parsedSource, context));
+                    Future<RuleExecutionOutcome> future = rulePool.submit(new RuleTask(rule, parsedSource, context, ruleSemaphore));
                     submittedTasks.add(new SubmittedRuleTask(rule.id(), parsedSource.filePath(), cacheKey, future));
                 }
             }
@@ -448,7 +485,7 @@ public class JavaAnalysisEngine {
                 }
             }
         } finally {
-            rulePool.shutdownNow();
+            rulePool.shutdown();
         }
         return new RuleRunResult(issues, ruleHitCounts, ruleDurationMillis, failedRuleIds, events);
     }
@@ -581,18 +618,26 @@ public class JavaAnalysisEngine {
         private final JavaRule rule;
         private final ParsedSource parsedSource;
         private final RuleContext context;
+        private final Semaphore ruleSemaphore;
 
-        private RuleTask(JavaRule rule, ParsedSource parsedSource, RuleContext context) {
+        private RuleTask(JavaRule rule, ParsedSource parsedSource, RuleContext context, Semaphore ruleSemaphore) {
             this.rule = rule;
             this.parsedSource = parsedSource;
             this.context = context;
+            this.ruleSemaphore = ruleSemaphore;
         }
 
         @Override
         public RuleExecutionOutcome call() {
             long start = System.nanoTime();
             try {
-                List<AnalysisIssue> found = rule.analyze(parsedSource.compilationUnit(), context);
+                ruleSemaphore.acquire();
+                List<AnalysisIssue> found;
+                try {
+                    found = rule.analyze(parsedSource.compilationUnit(), context);
+                } finally {
+                    ruleSemaphore.release();
+                }
                 long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
                 return new RuleExecutionOutcome(rule.id(), found, elapsedMillis);
             } catch (Exception e) {

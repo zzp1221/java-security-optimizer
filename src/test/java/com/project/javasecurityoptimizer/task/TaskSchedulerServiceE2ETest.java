@@ -11,12 +11,14 @@ import com.project.javasecurityoptimizer.analysis.IssueSeverity;
 import com.project.javasecurityoptimizer.analysis.JavaAnalysisEngine;
 import com.project.javasecurityoptimizer.analysis.ProgressEvent;
 import com.project.javasecurityoptimizer.analysis.RuleExecutionMetrics;
+import com.project.javasecurityoptimizer.analysis.hint.ContextHintResponse;
 import com.project.javasecurityoptimizer.plugin.PluginManagerService;
 import com.project.javasecurityoptimizer.security.SecurityAuditService;
 import com.project.javasecurityoptimizer.storage.TaskStatus;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -47,12 +49,23 @@ class TaskSchedulerServiceE2ETest {
         );
         schedulerService.start();
 
+        Path projectDir = Files.createTempDirectory("task-e2e-project");
+        Files.writeString(projectDir.resolve("Demo.java"), """
+                class Demo {
+                    void run() {
+                        String a = "1";
+                        String b = "2";
+                        boolean same = a == b;
+                    }
+                }
+                """);
+
         TaskSnapshot submitted = schedulerService.submit(new TaskSubmitRequest(
                 "task-e2e-001",
                 "trace-e2e-001",
                 "ws-e2e",
                 "java",
-                Path.of(".").toAbsolutePath().normalize().toString(),
+                projectDir.toAbsolutePath().normalize().toString(),
                 com.project.javasecurityoptimizer.analysis.AnalyzeMode.FULL,
                 Set.of("JAVA.STRING.EQUALITY"),
                 List.of(),
@@ -75,6 +88,9 @@ class TaskSchedulerServiceE2ETest {
         assertEquals(TaskStatus.COMPLETED, done.status());
         assertFalse(done.issues().isEmpty());
         assertTrue(done.events().stream().anyMatch(event -> "report".equals(event.stage())));
+        ContextHintResponse jitHints = schedulerService.findJitHints("task-e2e-001").orElse(null);
+        assertNotNull(jitHints);
+        assertFalse(jitHints.fileSummaries().isEmpty());
 
         TaskDiagnostics diagnostics = schedulerService.diagnostics();
         assertFalse(diagnostics.durationDistributions().isEmpty());
